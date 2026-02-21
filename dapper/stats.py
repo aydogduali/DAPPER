@@ -17,6 +17,7 @@ import warnings
 import numpy as np
 import scipy.linalg as sla
 import struct_tools
+import xarray as xr
 from matplotlib import pyplot as plt
 from patlib.std import do_once
 from scipy import special
@@ -491,6 +492,125 @@ class Stats(series.StatPrint):
                     plt.figure(_name)
                     plt.pause(0.01)
 
+    def export_netcdf(self, var_name=None, file_path=None):
+        """Export statistics to netCDF format using xarray.
+
+        Parameters
+        ----------
+        var_name : str, optional
+            Name of the variable to export. Must be an attribute of Stats.
+            If None, exports all DataSeries and FAUSt attributes.
+        file_path : str, optional
+            Output file path. If None, defaults to 'stats.nc' for all
+            variables or '{var_name}.nc' for a single variable.
+
+        Returns
+        -------
+        xr.Dataset
+            The exported xarray Dataset.
+        """
+        if var_name is None:
+            return self._export_all_netcdf(file_path)
+
+        if not hasattr(self, var_name):
+            raise AttributeError(f"Stats has no attribute '{var_name}'")
+
+        var = getattr(self, var_name)
+
+        if isinstance(var, series.FAUSt):
+            components = ["f", "a"]
+            if hasattr(var, "s"):
+                components.append("s")
+            if var.store_u:
+                components.append("u")
+            datasets = []
+            for comp in components:
+                data = getattr(var, comp)
+                if data.ndim == 1:
+                    coords = {"time": np.arange(data.shape[0])}
+                    dims = ("time",)
+                elif data.ndim == 2:
+                    coords = {"time": np.arange(data.shape[0]), "state": np.arange(data.shape[1])}
+                    dims = ("time", "state")
+                else:
+                    coords = {"time": np.arange(data.shape[0])}
+                    dims = ("time",) + tuple(f"dim{i}" for i in range(1, data.ndim))
+                da = xr.DataArray(data, coords=coords, dims=dims, name=f"{var_name}_{comp}")
+                datasets.append(da.to_dataset())
+            ds = xr.merge(datasets)
+
+        elif isinstance(var, series.DataSeries):
+            arr = var.array
+            if arr.ndim == 1:
+                coords = {"time": np.arange(len(arr))}
+                dims = ("time",)
+            elif arr.ndim == 2:
+                coords = {"time": np.arange(arr.shape[0]), "state": np.arange(arr.shape[1])}
+                dims = ("time", "state")
+            else:
+                coords = {"time": np.arange(arr.shape[0])}
+                dims = ("time",)
+            ds = xr.DataArray(arr, coords=coords, dims=dims, name=var_name).to_dataset()
+
+        else:
+            raise TypeError(f"Unsupported variable type: {type(var)}")
+
+        if file_path is None:
+            file_path = f"{var_name}.nc"
+        ds.to_netcdf(file_path)
+        return ds
+
+    def _export_all_netcdf(self, file_path=None):
+        """Export all DataSeries and FAUSt attributes to a single netCDF file."""
+        if file_path is None:
+            file_path = "stats.nc"
+
+        datasets = []
+        for attr_name in dir(self):
+            if attr_name.startswith("_"):
+                continue
+            try:
+                var = getattr(self, attr_name)
+            except AttributeError:
+                continue
+            if isinstance(var, series.FAUSt):
+                components = ["f", "a"]
+                if hasattr(var, "s"):
+                    components.append("s")
+                if var.store_u:
+                    components.append("u")
+                for comp in components:
+                    data = getattr(var, comp)
+                    if data.ndim == 1:
+                        coords = {"time": np.arange(data.shape[0])}
+                        dims = ("time",)
+                    elif data.ndim == 2:
+                        coords = {"time": np.arange(data.shape[0]), "state": np.arange(data.shape[1])}
+                        dims = ("time", "state")
+                    else:
+                        coords = {"time": np.arange(data.shape[0])}
+                        dims = ("time",) + tuple(f"dim{i}" for i in range(1, data.ndim))
+                    da = xr.DataArray(data, coords=coords, dims=dims, name=f"{attr_name}_{comp}")
+                    datasets.append(da.to_dataset())
+            elif isinstance(var, series.DataSeries):
+                arr = var.array
+                if arr.ndim == 1:
+                    coords = {"time": np.arange(len(arr))}
+                    dims = ("time",)
+                elif arr.ndim == 2:
+                    coords = {"time": np.arange(arr.shape[0]), "state": np.arange(arr.shape[1])}
+                    dims = ("time", "state")
+                else:
+                    coords = {"time": np.arange(arr.shape[0])}
+                    dims = ("time",)
+                da = xr.DataArray(arr, coords=coords, dims=dims, name=attr_name)
+                datasets.append(da.to_dataset())
+
+        ds = xr.merge(datasets)
+        ds.to_netcdf(file_path)
+        return ds
+        ds.to_netcdf(file_path)
+        return ds
 
 def register_stat(self, name, value):
     """Do `self.name = value` and register `name` as in self's `stat_register`.
